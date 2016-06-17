@@ -89,10 +89,16 @@ planify({ reporter: 'blocks' })
   return new Promise((resolve, reject) => {
     console.log('total songs', data.songs.length);
     async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
-      let folder        = path.join('songs', song.display_artist, `${song.album.display_artist} - ${song.album.title}`);
+console.log(JSON.stringify(song, null, 2));
+      let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
+      let albumTitle    = song.album.title.replace(/\//g,'-');
+      let songArtist    = song.display_artist.replace(/\//g,'-');
+      let songTitle     = song.title.replace(/\//g,'-');
+      let songNumber    = song.number;
+      let folder        = path.join('songs', albumArtist, albumTitle);
       let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
       let fileExtension = songFormat.split('_')[0];
-      let filePath      = path.join(folder, `${song.display_artist} - ${song.title}.${fileExtension}`);
+      let filePath      = path.join(folder, `${songNumber} - ${songArtist} - ${songTitle}.${fileExtension}`);
 
       mkdirp(folder, (err) => {
         if (err) {
@@ -118,6 +124,4 @@ planify({ reporter: 'blocks' })
   });
 })
 .run({})
-.catch(err => console.log(err))
-// Run returns a promise but callback style is also supported
-// .then(() => process.exit(), (err) => process.exit(1));
+.catch(err => console.log(err));
