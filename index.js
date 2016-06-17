@@ -86,10 +86,11 @@ planify({ reporter: 'blocks' })
 })
 
 .step(`Download songs`, data => {
+  data.downloaded = 0;
+
   return new Promise((resolve, reject) => {
     console.log('total songs', data.songs.length);
     async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
-console.log(JSON.stringify(song, null, 2));
       let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
       let albumTitle    = song.album.title.replace(/\//g,'-');
       let songArtist    = song.display_artist.replace(/\//g,'-');
@@ -112,7 +113,13 @@ console.log(JSON.stringify(song, null, 2));
         // and write into disk
         .pipe(fs.createWriteStream(filePath))
           .on('error', callback)
-          .on('finish', callback);
+          .on('finish', () => {
+            data.downloaded++;
+
+            console.log(`${data.downloaded} / ${data.total} done (${(data.downloaded / data.total).toFixed(2)}%).`);
+
+            return callback();
+          });
       });
     }, (err) => {
       if (err) {
