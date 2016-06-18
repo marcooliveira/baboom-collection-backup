@@ -18,14 +18,14 @@ planify({ reporter: 'blocks' })
 
 .phase('Generate user credentials', phase => {
   phase.step('Get user details', (data, done) => {
-    promptly.prompt('Email: ', (err, email) => {
+    promptly.prompt('Email', (err, email) => {
       if (err) {
         return done(err);
       }
 
       data.email = email;
 
-      promptly.password('Password: ', (err, password) => {
+      promptly.password('Password', (err, password) => {
         if (err) {
           return done(err);
         }
