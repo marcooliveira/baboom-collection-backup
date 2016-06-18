@@ -17,143 +17,138 @@ const format              = 'mp3_320k'; // available options are: flac, mp3_320k
 planify({ reporter: 'blocks' })
 
 .phase('Generate user credentials', phase => {
-  phase.step('Get user details', (data, done) => {
-    promptly.prompt('Email', (err, email) => {
-      if (err) {
-        return done(err);
-      }
+    phase.step('Get user details', (data, done) => {
+        promptly.prompt('Email', (err, email) => {
+            if (err) {
+                return done(err);
+            }
 
-      data.email = email;
+            data.email = email;
 
-      promptly.password('Password', (err, password) => {
-        if (err) {
-          return done(err);
-        }
+            promptly.password('Password', (err, password) => {
+                if (err) {
+                    return done(err);
+                }
 
-        data.password = password;
+                data.password = password;
 
-        return done();
-      });
+                return done();
+            });
+        });
+    })
+    .step('Login', data => {
+        return api.login(data.email, data.password)
+        .then(user => {
+            console.log('Logged in as:');
+            console.log(JSON.stringify(user, null, 2));
+            data.subscription = user.contexts.all[0].subject.subscription;
+            data.country = user.country;
+        });
     });
-  })
-  .step('Login', data => {
-    return api.login(data.email, data.password)
-    .then(user => {
-      console.log('Logged in as:');
-      console.log(JSON.stringify(user, null, 2));
-      data.subscription = user.contexts.all[0].subject.subscription;
-      data.country = user.country;
-    });
-  });
 })
 
 .phase('Gather collection list', phase => {
-  phase.step('Fetch list of songs', data => {
-    return api.songs(0, limitPerPage)
-    .then(res => {
-      data.requests = [];
+    phase.step('Fetch list of songs', data => {
+        return api.songs(0, limitPerPage)
+        .then(res => {
+            data.requests = [];
 
-      // initialise songs list with first page that was fetched
-      data.songs = res.items;
+            // initialise songs list with first page that was fetched
+            data.songs = res.items;
 
-      let offset = limitPerPage;
-      data.total = res.meta.total;
+            let offset = limitPerPage;
+            data.total = res.meta.total;
 
-      // prepare all requests to be made
-      while (offset <= data.total) {
-        let req = api.songs(offset, limitPerPage)
-                  .then(res => data.songs = data.songs.concat(res.items));
+            // prepare all requests to be made
+            while (offset <= data.total) {
+                let req = api.songs(offset, limitPerPage)
+                .then(res => data.songs = data.songs.concat(res.items));
 
-        data.requests.push(req);
+                data.requests.push(req);
 
-        offset += limitPerPage;
-      }
+                offset += limitPerPage;
+            }
 
-      // wait for all pages to be fetched
-      return Promise.all(data.requests)
-        .then(() => console.log(`${data.songs.length} songs found`));
+            // wait for all pages to be fetched
+            return Promise.all(data.requests)
+            .then(() => console.log(`${data.songs.length} songs found`));
+        });
+    })
+
+    .step('Store songs metadata', (data, done) => {
+        mkdirp('songs', err => {
+            if (err) {
+                throw err;
+            }
+
+            fs.writeFileSync(path.join('songs', 'songs.json'), JSON.stringify(data.songs, null, 2));
+
+            return done();
+        });
     });
-  })
-
-  .step('Store songs metadata', (data, done) => {
-    mkdirp('songs', err => {
-      if (err) {
-        throw err;
-      }
-
-      fs.writeFileSync(path.join('songs', 'songs.json'), JSON.stringify(data.songs, null, 2));
-
-      return done();
-    });
-  });
 })
 
 .step(`Download songs`, data => {
-  data.downloaded = 0;
+    data.downloaded = 0;
 
-  return new Promise((resolve, reject) => {
-    console.log('total songs', data.songs.length);
+    return new Promise((resolve, reject) => {
+        console.log('total songs', data.songs.length);
 
-    async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
-      let getSong = new Promise((resolve, reject) => {
-        // check if it's necessary to fetch playable from Catalogue
-        if (song.origin.type === 'uploaded') {
-          return resolve(song);
-        }
+        async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
+            // check if it's necessary to fetch playable from Catalogue
+            let getSong = song.origin.type === 'uploaded'
+                ? Promise.resolve(song)
+                : api.hydratePlayable(song.bbid, data.country) // catalogue playable, hydrate it
+                    .then(songs => songs[0])
 
-        // catalogue playable, hydrate it
-        return api.hydratePlayable(song.bbid, data.country)
-              .then(songs => songs[0])
-      });
+            getSong.then(song => {
+                let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
+                let albumTitle    = song.album.title.replace(/\//g,'-');
+                let songArtist    = song.display_artist.replace(/\//g,'-');
+                let songTitle     = song.title.replace(/\//g,'-');
+                let songNumber    = song.number;
+                let folder        = path.join('songs', albumArtist, albumTitle);
+                let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
+                let fileExtension = songFormat.split('_')[0];
+                let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
+                let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
 
-      getSong.then(song => {
-        let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
-        let albumTitle    = song.album.title.replace(/\//g,'-');
-        let songArtist    = song.display_artist.replace(/\//g,'-');
-        let songTitle     = song.title.replace(/\//g,'-');
-        let songNumber    = song.number;
-        let folder        = path.join('songs', albumArtist, albumTitle);
-        let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
-        let fileExtension = songFormat.split('_')[0];
-        let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
-        let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
+                // if song is not available to download for current subscription, skip it
+                if (song.origin.type !== 'uploaded' && song.availability_details.stream.indexOf(data.subscription) < 0) {
+                    console.log(chalk.yellow(`${fileTitle} is not available for download`));
 
-        // if song is not available to download for current subscription, skip it
-        if (song.origin.type !== 'uploaded' && song.availability_details.stream.indexOf(data.subscription) < 0) {
-          console.log(chalk.yellow(`${fileTitle} is not available for download`));
+                    return callback();
+                }
 
-          return callback();
-        }
+                mkdirp(folder, err => {
+                    if (err) {
+                        return callback(err);
+                    }
 
-        mkdirp(folder, (err) => {
-          if (err) {
-            return callback(err);
-          }
+                    // get file
+                    console.log(`Downloading ${filePath}`);
+                    api.songStream(song.stream.audio.url, songFormat)
+                    .on('error', callback)
+                    // and write into disk
+                    .pipe(fs.createWriteStream(filePath))
+                    .on('error', callback)
+                    .on('finish', () => {
+                        data.downloaded++;
 
-          // get file
-          console.log(`Downloading ${filePath}`);
-          api.songStream(song.stream.audio.url, songFormat)
-            .on('error', callback)
-          // and write into disk
-          .pipe(fs.createWriteStream(filePath))
-            .on('error', callback)
-            .on('finish', () => {
-              data.downloaded++;
+                        console.log(chalk.green(`${data.downloaded} / ${data.total} done (${(Math.round(data.downloaded / data.total * 100))}%).`));
 
-              console.log(chalk.green(`${data.downloaded} / ${data.total} done (${(Math.round(data.downloaded / data.total * 100))}%).`));
-
-              return callback();
+                        return callback();
+                    });
+                });
             });
-        });
-      });
-    }, err => {
-      if (err) {
-        return reject(err);
-      }
+        }, err => {
+            if (err) {
+                return reject(err);
+            }
 
-      return resolve();
-    });
-  }).then(() => console.log('done!'));
+            return resolve();
+        });
+    }).then(() => console.log('done!'));
 })
 .run({})
 .catch(err => console.log(err));
