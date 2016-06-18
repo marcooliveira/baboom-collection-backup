@@ -5,6 +5,7 @@ const async    = require('async');
 const mkdirp   = require('mkdirp');
 const path     = require('path');
 const planify  = require('planify');
+const chalk    = require('chalk');
 const api      = new (require('./lib/Api'))();
 
 // <CONFIG>
@@ -32,16 +33,18 @@ planify({ reporter: 'blocks' })
         data.password = password;
 
         return done();
-      })
-    })
+      });
+    });
   })
   .step('Login', data => {
     return api.login(data.email, data.password)
     .then(user => {
       console.log('Logged in as:');
       console.log(JSON.stringify(user, null, 2));
+      data.subscription = user.contexts.all[0].subject.subscription;
+      data.country = user.country;
     });
-  })
+  });
 })
 
 .phase('Gather collection list', phase => {
@@ -90,45 +93,67 @@ planify({ reporter: 'blocks' })
 
   return new Promise((resolve, reject) => {
     console.log('total songs', data.songs.length);
-    async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
-      let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
-      let albumTitle    = song.album.title.replace(/\//g,'-');
-      let songArtist    = song.display_artist.replace(/\//g,'-');
-      let songTitle     = song.title.replace(/\//g,'-');
-      let songNumber    = song.number;
-      let folder        = path.join('songs', albumArtist, albumTitle);
-      let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
-      let fileExtension = songFormat.split('_')[0];
-      let filePath      = path.join(folder, `${songNumber} - ${songArtist} - ${songTitle}.${fileExtension}`);
 
-      mkdirp(folder, (err) => {
-        if (err) {
-          return callback(err);
+    async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
+      let getSong = new Promise((resolve, reject) => {
+        // check if it's necessary to fetch playable from Catalogue
+        if (song.origin.type === 'uploaded') {
+          return resolve(song);
         }
 
-        // get file
-        console.log(`Downloading ${filePath}`);
-        api.songStream(song.stream.audio.url, songFormat)
-          .on('error', callback)
-        // and write into disk
-        .pipe(fs.createWriteStream(filePath))
-          .on('error', callback)
-          .on('finish', () => {
-            data.downloaded++;
-
-            console.log(`${data.downloaded} / ${data.total} done (${(data.downloaded / data.total).toFixed(2)}%).`);
-
-            return callback();
-          });
+        // catalogue playable, hydrate it
+        return api.hydratePlayable(song.bbid, data.country)
+              .then(songs => songs[0])
       });
-    }, (err) => {
+
+      getSong.then(song => {
+        let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
+        let albumTitle    = song.album.title.replace(/\//g,'-');
+        let songArtist    = song.display_artist.replace(/\//g,'-');
+        let songTitle     = song.title.replace(/\//g,'-');
+        let songNumber    = song.number;
+        let folder        = path.join('songs', albumArtist, albumTitle);
+        let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
+        let fileExtension = songFormat.split('_')[0];
+        let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
+        let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
+
+        // if song is not available to download for current subscription, skip it
+        if (song.origin.type !== 'uploaded' && song.availability_details.stream.indexOf(data.subscription) < 0) {
+          console.log(chalk.yellow(`${fileTitle} is not available for download`));
+
+          return callback();
+        }
+
+        mkdirp(folder, (err) => {
+          if (err) {
+            return callback(err);
+          }
+
+          // get file
+          console.log(`Downloading ${filePath}`);
+          api.songStream(song.stream.audio.url, songFormat)
+            .on('error', callback)
+          // and write into disk
+          .pipe(fs.createWriteStream(filePath))
+            .on('error', callback)
+            .on('finish', () => {
+              data.downloaded++;
+
+              console.log(chalk.green(`${data.downloaded} / ${data.total} done (${(Math.round(data.downloaded / data.total * 100))}%).`));
+
+              return callback();
+            });
+        });
+      });
+    }, err => {
       if (err) {
         return reject(err);
       }
 
       return resolve();
     });
-  });
+  }).then(() => console.log('done!'));
 })
 .run({})
 .catch(err => console.log(err));
