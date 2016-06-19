@@ -85,6 +85,13 @@ planify({ reporter: 'blocks' })
     data.downloaded = 0;
 
     return Promise.map(data.songs, song => {
+        if (!song.album) {
+            song.album = {
+                display_artist: 'Unknown',
+                title: 'Untitled'
+            };
+        }
+        
         let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
         let albumTitle    = song.album.title.replace(/\//g,'-');
         let songArtist    = song.display_artist.replace(/\//g,'-');
