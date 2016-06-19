@@ -82,7 +82,7 @@ planify({ reporter: 'blocks' })
 })
 
 .step(`Download songs`, data => {
-    data.downloaded = 0;
+    data.handled = 0;
 
     return Promise.map(data.songs, song => {
         if (!song.album) {
@@ -91,7 +91,7 @@ planify({ reporter: 'blocks' })
                 title: 'Untitled'
             };
         }
-        
+
         let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
         let albumTitle    = song.album.title.replace(/\//g,'-');
         let songArtist    = song.display_artist.replace(/\//g,'-');
@@ -114,6 +114,8 @@ planify({ reporter: 'blocks' })
             if (!catalogueSong || !catalogueSong.origin && catalogueSong.availability_details.stream.indexOf(data.subscription) < 0) {
                 console.log(chalk.yellow(`${fileTitle} is not available for download`));
 
+                data.handled++;
+
                 return;
             }
 
@@ -128,9 +130,9 @@ planify({ reporter: 'blocks' })
                     .pipe(fs.createWriteStream(filePath))
                     .on('error', reject)
                     .on('finish', () => {
-                        data.downloaded++;
+                        data.handled++;
 
-                        console.log(chalk.green(`${data.downloaded} / ${data.total} done (${(Math.round(data.downloaded / data.total * 100))}%).`));
+                        console.log(chalk.green(`${data.handled} / ${data.total} done (${(Math.round(data.handled / data.total * 100))}%).`));
 
                         return resolve();
                     });
