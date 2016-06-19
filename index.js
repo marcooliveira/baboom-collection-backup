@@ -84,6 +84,10 @@ planify({ reporter: 'blocks' })
 .step(`Download songs`, data => {
     data.handled = 0;
 
+    function progress() {
+        console.log(chalk.green(`${data.handled} / ${data.total} done (${(Math.round(data.handled / data.total * 100))}%).`));
+    }
+
     return Promise.map(data.songs, song => {
         if (!song.album) {
             song.album = {
@@ -116,6 +120,8 @@ planify({ reporter: 'blocks' })
 
                 data.handled++;
 
+                progress();
+
                 return;
             }
 
@@ -132,7 +138,7 @@ planify({ reporter: 'blocks' })
                     .on('finish', () => {
                         data.handled++;
 
-                        console.log(chalk.green(`${data.handled} / ${data.total} done (${(Math.round(data.handled / data.total * 100))}%).`));
+                        progress();
 
                         return resolve();
                     });
