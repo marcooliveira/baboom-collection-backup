@@ -9,8 +9,8 @@ const chalk    = require('chalk');
 const api      = new (require('./lib/Api'))();
 
 // <CONFIG>
-const limitPerPage        = 100;
-const downloadConcurrency = 5;
+const limitPerPage        = 500;
+const downloadConcurrency = 10;
 const format              = 'mp3_320k'; // available options are: flac, mp3_320k, mp3_192k, ogg_vorbis_q9, ogg_vorbis_q5, ogg_vorbis_q2
 // </CONFIG>
 
@@ -82,11 +82,16 @@ planify({ reporter: 'blocks' })
 })
 
 .step(`Download songs`, data => {
-    data.handled = 0;
+    let progress = (function (increment = true) {
+        if (increment) {
+            this.handled++;
+        }
 
-    function progress() {
-        console.log(chalk.green(`${data.handled} / ${data.total} done (${(Math.round(data.handled / data.total * 100))}%).`));
-    }
+        console.log(chalk.green(`${this.handled} / ${this.total} done (${(Math.round(this.handled / this.total * 100))}%).`));
+    }).bind({
+        total: data.total,
+        handled: 0
+    });
 
     return Promise.map(data.songs, song => {
         if (!song.album) {
@@ -96,16 +101,22 @@ planify({ reporter: 'blocks' })
             };
         }
 
-        let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
-        let albumTitle    = song.album.title.replace(/\//g,'-');
-        let songArtist    = song.display_artist.replace(/\//g,'-');
-        let songTitle     = song.title.replace(/\//g,'-');
-        let songNumber    = song.number;
-        let folder        = path.join('songs', albumArtist, albumTitle);
-        let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
-        let fileExtension = songFormat.split('_')[0];
-        let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
-        let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
+        try {
+            var albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
+            var albumTitle    = song.album.title.replace(/\//g,'-');
+            var songArtist    = song.display_artist.replace(/\//g,'-');
+            var songTitle     = song.title.replace(/\//g,'-');
+            var songNumber    = song.number;
+            var folder        = path.join('songs', albumArtist, albumTitle);
+            var songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
+            var fileExtension = songFormat.split('_')[0];
+            var fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
+            var filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
+        } catch(err) {
+            console.error(chalk.red('Error downloading, when getting metadata:', JSON.stringify(err, null, 2)));
+
+            return progress();
+        }
 
         // check if it's necessary to fetch playable from Catalogue
         let getSong = song.origin.type === 'uploaded'
@@ -113,16 +124,18 @@ planify({ reporter: 'blocks' })
             : api.hydratePlayable(song.bbid, data.country) // catalogue playable, hydrate it
                 .then(songs => songs[0]);
 
-        return getSong.then(catalogueSong => {
+        return getSong.then(song => {
             // if song is not available to download for current subscription, skip it
-            if (!catalogueSong || !catalogueSong.origin && catalogueSong.availability_details.stream.indexOf(data.subscription) < 0) {
-                console.log(chalk.yellow(`${fileTitle} is not available for download`));
+            try {
+                if (!song || !song.origin && song.availability_details.stream.indexOf(data.subscription) < 0) {
+                    console.log(chalk.yellow(`${fileTitle} is not available for download`));
 
-                data.handled++;
+                    return progress();
+                }
+            } catch(err) {
+                console.error(chalk.red('Error downloading, when analysing catalogue metadata:', JSON.stringify(err, null, 2)));
 
-                progress();
-
-                return;
+                return progress();
             }
 
             return mkdirp(folder)
@@ -136,8 +149,6 @@ planify({ reporter: 'blocks' })
                     .pipe(fs.createWriteStream(filePath))
                     .on('error', reject)
                     .on('finish', () => {
-                        data.handled++;
-
                         progress();
 
                         return resolve();
