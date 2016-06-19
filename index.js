@@ -1,8 +1,8 @@
 const promptly = require('promptly');
 const got      = require('got');
 const fs       = require('fs');
-const async    = require('async');
-const mkdirp   = require('mkdirp');
+const Promise  = require('bluebird');
+const mkdirp   = Promise.promisify(require('mkdirp'));
 const path     = require('path');
 const planify  = require('planify');
 const chalk    = require('chalk');
@@ -75,80 +75,62 @@ planify({ reporter: 'blocks' })
         });
     })
 
-    .step('Store songs metadata', (data, done) => {
-        mkdirp('songs', err => {
-            if (err) {
-                throw err;
-            }
-
-            fs.writeFileSync(path.join('songs', 'songs.json'), JSON.stringify(data.songs, null, 2));
-
-            return done();
-        });
+    .step('Store songs metadata', (data) => {
+        return mkdirp('songs')
+        .then(() => fs.writeFileSync(path.join('songs', 'songs.json'), JSON.stringify(data.songs, null, 2)));
     });
 })
 
 .step(`Download songs`, data => {
     data.downloaded = 0;
 
-    return new Promise((resolve, reject) => {
-        console.log('total songs', data.songs.length);
+    return Promise.map(data.songs, song => {
+        let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
+        let albumTitle    = song.album.title.replace(/\//g,'-');
+        let songArtist    = song.display_artist.replace(/\//g,'-');
+        let songTitle     = song.title.replace(/\//g,'-');
+        let songNumber    = song.number;
+        let folder        = path.join('songs', albumArtist, albumTitle);
+        let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
+        let fileExtension = songFormat.split('_')[0];
+        let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
+        let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
 
-        async.eachLimit(data.songs, downloadConcurrency, (song, callback) => {
-            // check if it's necessary to fetch playable from Catalogue
-            let getSong = song.origin.type === 'uploaded'
-                ? Promise.resolve(song)
-                : api.hydratePlayable(song.bbid, data.country) // catalogue playable, hydrate it
-                    .then(songs => songs[0])
+        // check if it's necessary to fetch playable from Catalogue
+        let getSong = song.origin.type === 'uploaded'
+            ? Promise.resolve(song)
+            : api.hydratePlayable(song.bbid, data.country) // catalogue playable, hydrate it
+                .then(songs => songs[0]);
 
-            getSong.then(song => {
-                let albumArtist   = (song.album.display_artist ? song.album.display_artist : song.display_artist).replace(/\//g,'-');
-                let albumTitle    = song.album.title.replace(/\//g,'-');
-                let songArtist    = song.display_artist.replace(/\//g,'-');
-                let songTitle     = song.title.replace(/\//g,'-');
-                let songNumber    = song.number;
-                let folder        = path.join('songs', albumArtist, albumTitle);
-                let songFormat    = song.stream.audio.tags.indexOf(format) >= 0 ? format : song.stream.audio.tags[0]; // if the prefered format is available, use, else use the available one
-                let fileExtension = songFormat.split('_')[0];
-                let fileTitle     = `${songNumber} - ${songArtist} - ${songTitle}`;
-                let filePath      = path.join(folder, `${fileTitle}.${fileExtension}`);
+        return getSong.then(catalogueSong => {
+            // if song is not available to download for current subscription, skip it
+            if (!catalogueSong || !catalogueSong.origin && catalogueSong.availability_details.stream.indexOf(data.subscription) < 0) {
+                console.log(chalk.yellow(`${fileTitle} is not available for download`));
 
-                // if song is not available to download for current subscription, skip it
-                if (song.origin.type !== 'uploaded' && song.availability_details.stream.indexOf(data.subscription) < 0) {
-                    console.log(chalk.yellow(`${fileTitle} is not available for download`));
+                return;
+            }
 
-                    return callback();
-                }
-
-                mkdirp(folder, err => {
-                    if (err) {
-                        return callback(err);
-                    }
-
+            return mkdirp(folder)
+            .then(() => {
+                return new Promise((resolve, reject) => {
                     // get file
                     console.log(`Downloading ${filePath}`);
                     api.songStream(song.stream.audio.url, songFormat)
-                    .on('error', callback)
+                    .on('error', reject)
                     // and write into disk
                     .pipe(fs.createWriteStream(filePath))
-                    .on('error', callback)
+                    .on('error', reject)
                     .on('finish', () => {
                         data.downloaded++;
 
                         console.log(chalk.green(`${data.downloaded} / ${data.total} done (${(Math.round(data.downloaded / data.total * 100))}%).`));
 
-                        return callback();
+                        return resolve();
                     });
                 });
             });
-        }, err => {
-            if (err) {
-                return reject(err);
-            }
-
-            return resolve();
         });
-    }).then(() => console.log('done!'));
+    }, { concurrency: downloadConcurrency });
 })
 .run({})
 .catch(err => console.log(err));
